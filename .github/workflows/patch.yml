@@ -1,30 +1,60 @@
-      - name: Patch, Match Publisher, and Sign
+name: Patch and Sign Roblox
+on:
+  workflow_dispatch:
+
+jobs:
+  patch:
+    runs-on: windows-latest
+    steps:
+      - name: Setup Folders
+        run: |
+          mkdir C:\patch_work
+          mkdir C:\patch_work\bundle_unpacked
+          mkdir C:\patch_work\app_unpacked
+
+      - name: Download Roblox from Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          # 1. Deep Search for the tools (finds the newest version automatically)
-          $sdkBin = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin\*" | Where-Object { $_.Name -like "10.*" } | Sort-Object Name -Descending | Select-Object -First 1
-          $makeappx = "$($sdkBin.FullName)\x64\makeappx.exe"
-          $signtool = "$($sdkBin.FullName)\x64\signtool.exe"
+          gh release download --repo ${{ github.repository }} --pattern "*bundle*" --output "C:\patch_work\roblox_input.msixbundle"
+
+      - name: Final Patch and Sign Logic
+        shell: pwsh
+        run: |
+          # 1. Locate Tools using environment variables
+          $sdkPath = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin\10.0.22621.0\x64"
+          $makeappx = "$sdkPath\makeappx.exe"
+          $signtool = "$sdkPath\signtool.exe"
+
+          Write-Host "Verifying tool: $makeappx"
+
+          # 2. Unbundle the main file
+          & $makeappx unbundle /p "C:\patch_work\roblox_input.msixbundle" /d "C:\patch_work\bundle_unpacked" /o
           
-          Write-Host "Using MakeAppx from: $makeappx"
-          Write-Host "Using SignTool from: $signtool"
-
-          # 2. Unpack
-          & $makeappx unbundle /p "C:\roblox_input.msixbundle" /d "C:\bundle_unpacked" /o
-          $innerApp = Get-ChildItem -Path "C:\bundle_unpacked\*.msix" | Sort-Object Length -Descending | Select-Object -First 1
-          & $makeappx unpack /p "$($innerApp.FullName)" /d "C:\app_unpacked" /nv /o
-
-          # 3. Patch Manifest
-          $manifestPath = "C:\app_unpacked\AppxManifest.xml"
+          # 3. Find and Unpack the game
+          $innerApp = Get-ChildItem -Path "C:\patch_work\bundle_unpacked\*.msix" | Sort-Object Length -Descending | Select-Object -First 1
+          & $makeappx unpack /p "$($innerApp.FullName)" /d "C:\patch_work\app_unpacked" /nv /o
+          
+          # 4. Modify Manifest
+          $manifestPath = "C:\patch_work\app_unpacked\AppxManifest.xml"
           $content = Get-Content $manifestPath
           $content = $content -replace 'Windows.Desktop', 'Windows.Universal'
           $content = $content -replace 'Publisher="[^"]+"', 'Publisher="CN=MyTempCert"'
           $content | Set-Content $manifestPath
 
-          # 4. Create and Export Certificate
+          # 5. Create Certificate
           $cert = New-SelfSignedCertificate -Type Custom -Subject "CN=MyTempCert" -KeyUsage DigitalSignature -FriendlyName "XboxFix" -CertStoreLocation "Cert:\CurrentUser\My" -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3")
-          Export-Certificate -Cert $cert -FilePath "C:\XboxTrust.cer"
+          Export-Certificate -Cert $cert -FilePath "C:\patch_work\XboxTrust.cer"
 
-          # 5. Pack and Sign
-          & $makeappx pack /d "C:\app_unpacked" /p "C:\patched_signed.msix" /nv /o
-          & $signtool sign /fd SHA256 /a /f "C:\XboxTrust.cer" /csp "Microsoft Software Key Storage Provider" "C:\patched_signed.msix"
+          # 6. Repack and Sign
+          & $makeappx pack /d "C:\patch_work\app_unpacked" /p "C:\patch_work\patched_signed.msix" /nv /o
+          & $signtool sign /fd SHA256 /a /f "C:\patch_work\XboxTrust.cer" /csp "Microsoft Software Key Storage Provider" "C:\patch_work\patched_signed.msix"
+
+      - name: Upload Finished Files
+        uses: actions/upload-artifact@v4
+        with:
+          name: Roblox-Xbox-Ready
+          path: |
+            C:\patch_work\patched_signed.msix
+            C:\patch_work\XboxTrust.cer
