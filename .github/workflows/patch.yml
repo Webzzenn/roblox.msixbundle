@@ -1,40 +1,45 @@
 name: Patch Roblox for Xbox
 on:
-  workflow_dispatch: # This lets you start it manually with a button
+  workflow_dispatch:
 
 jobs:
   patch:
     runs-on: windows-latest
     steps:
-      - name: Download from Release
+      - name: Setup Windows SDK
         shell: pwsh
         run: |
-          # This script finds your 300mb file and downloads it to the "Cloud PC"
-          $url = (Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/latest").assets[0].browser_download_url
-          Invoke-WebRequest -Uri $url -OutFile "roblox_original.msixbundle"
+          $sdkPath = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64"
+          echo "$sdkPath" >> $env:GITHUB_PATH
 
-      - name: Unpack and Edit Manifest
+      - name: Download Roblox from Release
         shell: pwsh
         run: |
-          # 1. Expand the bundle
-          mkdir unpacked
-          expand-archive roblox_original.msixbundle -DestinationPath ./unpacked
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/latest"
+          $url = $release.assets | Where-Object { $_.name -like "*bundle*" } | Select-Object -ExpandProperty browser_download_url
+          Invoke-WebRequest -Uri $url -OutFile "roblox_input.msixbundle"
+
+      - name: Extract Bundle and Patch App
+        shell: pwsh
+        run: |
+          # 1. Unpack the main bundle
+          makeappx unpack /p roblox_input.msixbundle /d ./bundle_unpacked /nm
           
-          # 2. Find the AppxManifest.xml and swap Desktop for Xbox
-          $manifest = Get-Content ./unpacked/AppxManifest.xml
-          $manifest = $manifest -replace 'Windows.Desktop', 'Windows.Universal'
-          $manifest | Set-Content ./unpacked/AppxManifest.xml
-
-      - name: Repack and Sign
-        shell: pwsh
-        run: |
-          # This part creates a fake "Test Certificate" so the Xbox accepts the file
-          New-SelfSignedCertificate -Type Custom -Subject "CN=RobloxPatch" -KeyUsage DigitalSignature -FriendlyName "TestCert" -CertStoreLocation "Cert:\CurrentUser\My"
-          # (Simplified: In a real scenario, you'd use 'MakeAppx' here to rebuild the bundle)
-          Compress-Archive -Path ./unpacked/* -DestinationPath patched_roblox.msixbundle
-
-      - name: Upload Finished File
+          # 2. Find the biggest .msix file (the actual game)
+          $innerApp = Get-ChildItem -Path ./bundle_unpacked/*.msix | Sort-Object Length -Descending | Select-Object -First 1
+          
+          # 3. Unpack that inner app
+          makeappx unpack /p $innerApp.FullName /d ./app_unpacked /nm
+          
+          # 4. Patch the manifest inside the inner app
+          $manifestPath = "./app_unpacked/AppxManifest.xml"
+          (Get-Content $manifestPath) -replace 'Windows.Desktop', 'Windows.Universal' | Set-Content $manifestPath
+          
+          # 5. Pack the inner app back up
+          makeappx pack /d ./app_unpacked /p patched_inner.msix /nm
+          
+      - name: Upload Patched Game
         uses: actions/upload-artifact@v4
         with:
-          name: Patched-Roblox-for-Xbox
-          path: patched_roblox.msixbundle
+          name: Patched-Roblox-Xbox
+          path: patched_inner.msix
