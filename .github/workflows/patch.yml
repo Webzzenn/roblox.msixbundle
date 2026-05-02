@@ -27,14 +27,15 @@ jobs:
         run: |
           $makeappx = (Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\makeappx.exe" | Select-Object -First 1).FullName
           
-          # 1. Unpack the main bundle (Removed /nm, added /nv and /o)
-          & $makeappx unpack /p "C:\patch_work\roblox_input.msixbundle" /d "C:\patch_work\bundle_unpacked" /nv /o
+          # 1. Use UNBUNDLE for the .msixbundle file
+          & $makeappx unbundle /p "C:\patch_work\roblox_input.msixbundle" /d "C:\patch_work\bundle_unpacked" /o
           
-          # 2. Find the biggest .msix file (the actual game)
+          # 2. Find the biggest .msix file
           $innerApp = Get-ChildItem -Path "C:\patch_work\bundle_unpacked\*.msix" | Sort-Object Length -Descending | Select-Object -First 1
+          if ($null -eq $innerApp) { Write-Error "No .msix file found inside the bundle!"; exit 1 }
           Write-Host "Found inner app: $($innerApp.FullName)"
           
-          # 3. Unpack that inner app
+          # 3. Use UNPACK for the inner .msix file
           & $makeappx unpack /p "$($innerApp.FullName)" /d "C:\patch_work\app_unpacked" /nv /o
           
           # 4. Patch the manifest
