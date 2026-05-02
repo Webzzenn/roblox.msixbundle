@@ -1,4 +1,4 @@
-name: Patch Roblox for Xbox
+name: Patch and Sign Roblox
 on:
   workflow_dispatch:
 
@@ -6,48 +6,44 @@ jobs:
   patch:
     runs-on: windows-latest
     steps:
-      - name: Setup Folders
-        shell: pwsh
-        run: |
-          mkdir C:\patch_work
-          mkdir C:\patch_work\bundle_unpacked
-          mkdir C:\patch_work\app_unpacked
-
-      - name: Download Roblox from Release
+      - name: Download Roblox
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          gh release download --repo ${{ github.repository }} --pattern "*bundle*" --output "C:\patch_work\roblox_input.msixbundle"
-          $size = (Get-Item "C:\patch_work\roblox_input.msixbundle").Length / 1MB
-          Write-Host "Downloaded file size: $size MB"
+          gh release download --repo ${{ github.repository }} --pattern "*bundle*" --output "C:\roblox_input.msixbundle"
 
-      - name: Extract Bundle and Patch App
+      - name: Patch and Sign
         shell: pwsh
         run: |
-          $makeappx = (Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\makeappx.exe" | Select-Object -First 1).FullName
-          
-          # 1. Use UNBUNDLE for the .msixbundle file
-          & $makeappx unbundle /p "C:\patch_work\roblox_input.msixbundle" /d "C:\patch_work\bundle_unpacked" /o
-          
-          # 2. Find the biggest .msix file
-          $innerApp = Get-ChildItem -Path "C:\patch_work\bundle_unpacked\*.msix" | Sort-Object Length -Descending | Select-Object -First 1
-          if ($null -eq $innerApp) { Write-Error "No .msix file found inside the bundle!"; exit 1 }
-          Write-Host "Found inner app: $($innerApp.FullName)"
-          
-          # 3. Use UNPACK for the inner .msix file
-          & $makeappx unpack /p "$($innerApp.FullName)" /d "C:\patch_work\app_unpacked" /nv /o
-          
-          # 4. Patch the manifest
-          $manifestPath = "C:\patch_work\app_unpacked\AppxManifest.xml"
+          # 1. Find tools
+          $sdkPath = (Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin\*\x64" | Select-Object -First 1).FullName
+          $makeappx = "$sdkPath\makeappx.exe"
+          $signtool = "$sdkPath\signtool.exe"
+
+          # 2. Unbundle and Unpack
+          & $makeappx unbundle /p "C:\roblox_input.msixbundle" /d "C:\bundle_unpacked" /o
+          $innerApp = Get-ChildItem -Path "C:\bundle_unpacked\*.msix" | Sort-Object Length -Descending | Select-Object -First 1
+          & $makeappx unpack /p "$($innerApp.FullName)" /d "C:\app_unpacked" /nv /o
+
+          # 3. Patch Manifest
+          $manifestPath = "C:\app_unpacked\AppxManifest.xml"
           (Get-Content $manifestPath) -replace 'Windows.Desktop', 'Windows.Universal' | Set-Content $manifestPath
-          Write-Host "Manifest Patched successfully."
+
+          # 4. Create a Certificate (This is the "ID card" for the app)
+          $cert = New-SelfSignedCertificate -Type Custom -Subject "CN=MyTempCert" -KeyUsage DigitalSignature -FriendlyName "XboxFix" -CertStoreLocation "Cert:\CurrentUser\My" -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3")
           
-          # 5. Pack the inner app back up
-          & $makeappx pack /d "C:\patch_work\app_unpacked" /p "C:\patch_work\patched_inner.msix" /nv /o
-          
-      - name: Upload Patched Game
+          # 5. Export the Certificate (We need this for the Xbox later)
+          Export-Certificate -Cert $cert -FilePath "C:\XboxTrust.cer"
+
+          # 6. Repack and Sign
+          & $makeappx pack /d "C:\app_unpacked" /p "C:\patched_signed.msix" /nv /o
+          & $signtool sign /fd SHA256 /a /f "C:\XboxTrust.cer" /csp "Microsoft Software Key Storage Provider" "C:\patched_signed.msix"
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Patched-Roblox-Xbox
-          path: C:\patch_work\patched_inner.msix
+          name: Patched-And-Cert
+          path: |
+            C:\patched_signed.msix
+            C:\XboxTrust.cer
