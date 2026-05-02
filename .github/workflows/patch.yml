@@ -7,33 +7,43 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Download Roblox from Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/latest"
-          $url = $release.assets | Where-Object { $_.name -like "*bundle*" } | Select-Object -ExpandProperty browser_download_url
-          Invoke-WebRequest -Uri $url -OutFile "roblox_input.msixbundle"
+          # Use GitHub's official CLI tool to securely bypass private repository locks
+          gh release download --repo ${{ github.repository }} --pattern "*bundle*" --output "roblox_input.msixbundle"
+          
+          # Check if the file actually downloaded successfully
+          $size = (Get-Item "roblox_input.msixbundle").Length / 1MB
+          Write-Host "Downloaded file size: $size MB"
+          if ($size -lt 50) { 
+              Write-Error "Download failed! The file is too small. Make sure your Release is published." 
+              exit 1
+          }
 
       - name: Extract Bundle and Patch App
         shell: pwsh
         run: |
-          # 1. Search for makeappx.exe automatically
           $makeappx = (Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\makeappx.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
-          Write-Host "Found MakeAppx tool at: $makeappx"
+          Write-Host "MakeAppx Tool Found!"
 
-          # 2. Unpack the main bundle
+          # 1. Unpack the main bundle
           & $makeappx unpack /p roblox_input.msixbundle /d ./bundle_unpacked /nm
           
-          # 3. Find the biggest .msix file (the actual game)
+          # 2. Find the biggest .msix file (the actual game)
           $innerApp = Get-ChildItem -Path ./bundle_unpacked/*.msix | Sort-Object Length -Descending | Select-Object -First 1
+          Write-Host "Found inner app: $($innerApp.Name)"
           
-          # 4. Unpack that inner app
+          # 3. Unpack that inner app
           & $makeappx unpack /p $innerApp.FullName /d ./app_unpacked /nm
           
-          # 5. Patch the manifest inside the inner app
+          # 4. Patch the manifest inside the inner app
           $manifestPath = "./app_unpacked/AppxManifest.xml"
           (Get-Content $manifestPath) -replace 'Windows.Desktop', 'Windows.Universal' | Set-Content $manifestPath
+          Write-Host "Manifest Patched!"
           
-          # 6. Pack the inner app back up
+          # 5. Pack the inner app back up
           & $makeappx pack /d ./app_unpacked /p patched_inner.msix /nm
           
       - name: Upload Patched Game
