@@ -19,7 +19,6 @@ jobs:
         shell: pwsh
         run: |
           gh release download --repo ${{ github.repository }} --pattern "*bundle*" --output "C:\patch_work\roblox_input.msixbundle"
-          
           $size = (Get-Item "C:\patch_work\roblox_input.msixbundle").Length / 1MB
           Write-Host "Downloaded file size: $size MB"
 
@@ -28,22 +27,23 @@ jobs:
         run: |
           $makeappx = (Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\makeappx.exe" | Select-Object -First 1).FullName
           
-          # 1. Unpack the main bundle
-          & $makeappx unpack /p "C:\patch_work\roblox_input.msixbundle" /d "C:\patch_work\bundle_unpacked" /nm
+          # 1. Unpack the main bundle (Removed /nm, added /nv and /o)
+          & $makeappx unpack /p "C:\patch_work\roblox_input.msixbundle" /d "C:\patch_work\bundle_unpacked" /nv /o
           
-          # 2. Find the biggest .msix file
+          # 2. Find the biggest .msix file (the actual game)
           $innerApp = Get-ChildItem -Path "C:\patch_work\bundle_unpacked\*.msix" | Sort-Object Length -Descending | Select-Object -First 1
-          Write-Host "Found inner app: $($innerApp.Name)"
+          Write-Host "Found inner app: $($innerApp.FullName)"
           
           # 3. Unpack that inner app
-          & $makeappx unpack /p "$($innerApp.FullName)" /d "C:\patch_work\app_unpacked" /nm
+          & $makeappx unpack /p "$($innerApp.FullName)" /d "C:\patch_work\app_unpacked" /nv /o
           
           # 4. Patch the manifest
           $manifestPath = "C:\patch_work\app_unpacked\AppxManifest.xml"
           (Get-Content $manifestPath) -replace 'Windows.Desktop', 'Windows.Universal' | Set-Content $manifestPath
+          Write-Host "Manifest Patched successfully."
           
           # 5. Pack the inner app back up
-          & $makeappx pack /d "C:\patch_work\app_unpacked" /p "C:\patch_work\patched_inner.msix" /nm
+          & $makeappx pack /d "C:\patch_work\app_unpacked" /p "C:\patch_work\patched_inner.msix" /nv /o
           
       - name: Upload Patched Game
         uses: actions/upload-artifact@v4
