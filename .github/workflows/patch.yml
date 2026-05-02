@@ -6,12 +6,6 @@ jobs:
   patch:
     runs-on: windows-latest
     steps:
-      - name: Setup Windows SDK
-        shell: pwsh
-        run: |
-          $sdkPath = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64"
-          echo "$sdkPath" >> $env:GITHUB_PATH
-
       - name: Download Roblox from Release
         shell: pwsh
         run: |
@@ -22,21 +16,25 @@ jobs:
       - name: Extract Bundle and Patch App
         shell: pwsh
         run: |
-          # 1. Unpack the main bundle
-          makeappx unpack /p roblox_input.msixbundle /d ./bundle_unpacked /nm
+          # 1. Search for makeappx.exe automatically
+          $makeappx = (Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\makeappx.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          Write-Host "Found MakeAppx tool at: $makeappx"
+
+          # 2. Unpack the main bundle
+          & $makeappx unpack /p roblox_input.msixbundle /d ./bundle_unpacked /nm
           
-          # 2. Find the biggest .msix file (the actual game)
+          # 3. Find the biggest .msix file (the actual game)
           $innerApp = Get-ChildItem -Path ./bundle_unpacked/*.msix | Sort-Object Length -Descending | Select-Object -First 1
           
-          # 3. Unpack that inner app
-          makeappx unpack /p $innerApp.FullName /d ./app_unpacked /nm
+          # 4. Unpack that inner app
+          & $makeappx unpack /p $innerApp.FullName /d ./app_unpacked /nm
           
-          # 4. Patch the manifest inside the inner app
+          # 5. Patch the manifest inside the inner app
           $manifestPath = "./app_unpacked/AppxManifest.xml"
           (Get-Content $manifestPath) -replace 'Windows.Desktop', 'Windows.Universal' | Set-Content $manifestPath
           
-          # 5. Pack the inner app back up
-          makeappx pack /d ./app_unpacked /p patched_inner.msix /nm
+          # 6. Pack the inner app back up
+          & $makeappx pack /d ./app_unpacked /p patched_inner.msix /nm
           
       - name: Upload Patched Game
         uses: actions/upload-artifact@v4
